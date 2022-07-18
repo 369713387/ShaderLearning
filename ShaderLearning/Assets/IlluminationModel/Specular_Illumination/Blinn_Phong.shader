@@ -56,9 +56,9 @@ Shader "Unlit/BlinnPhong"
                 //准备中间结果
                 float3 ndoth = dot(nDir,hDir);
                 //光照模型
-                float3 Phong = pow(max(0.0,ndoth),_SpecularPow);
+                float3 BlinnPhong = pow(max(0.0,ndoth),_SpecularPow);
                 //返回结果
-                return float4(Phong,1.0);
+                return float4(BlinnPhong,1.0);
             }
             ENDCG
         }
