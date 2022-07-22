@@ -1,17 +1,29 @@
 Shader "Unlit/OldSchoolPro"
 {
     Properties {
-        _MainTex ("颜色贴图", 2D) = "white" {}
-        _NormalMap("法线贴图",2d) = "bump" {}
-        _CubeMap("立方体贴图",CUBE) = "gray" {}
-        _CubeMapLOD("立方体贴图LOD",range(0,7)) = 1
-        _FresnelPow("菲涅尔反射强度",range(0,10)) = 1
-        _EnvUpCol("顶部环境光颜色",color) = (1.0,1.0,1.0,1.0)
-        _EnvSideCol("侧边环境光颜色",color) = (1.0,1.0,1.0,1.0)
-        _EnvDownCol("底部环境光颜色",color) = (1.0,1.0,1.0,1.0)
-        _Occlusion("AO贴图",2D) = "white" {}
-        _EnvLightPow("环境光强度",range(0,50)) = 25
-        _SpecularPow("高光强度",range(0,400)) = 150
+        [Header(Texture)]
+        _MainTex ("RGB:基础颜色 A:环境遮罩", 2D) = "white" {}
+        _NormalMap("RGB:法线贴图",2d) = "bump" {}
+        _SpecTex("RGB:高光颜色 A:高光次幂",2d) = "gray" {}
+        _EmitTex("RGB:自发光贴图",2D) = "black" {}
+        _CubeMap("RGB:环境反射贴图",CUBE) = "_Skybox" {}
+
+        [Header(Diffuse)]
+        _BaseCol("基础颜色",color) = (0.5, 0.5, 0.5, 1.0)
+        _EnvTopCol("天空环境光颜色",color) = (1.0,1.0,1.0,1.0)
+        _EnvBottomCol("地表环境光颜色",color) = (0.0, 0.0, 0.0, 0.0)
+        _EnvSideCol("其他环境光颜色",color) = (0.5, 0.5, 0.5, 1.0)
+        _EnvDiffPow("环境漫反射强度",range(0,1)) = 0.2
+
+        [Header(Specular)]
+        _SpecularPow("高光次幂",range(1,90)) = 10
+        _EnvSpcPow("镜面反射强度",range(0,5)) = 5
+        _FresnelPow("菲涅尔次幂",range(0,5)) = 1
+        _CubeMapLOD("环境反射贴图LOD(mipmap有8个等级)",range(0,7)) = 0
+
+        [Header(Emission)]
+        _EmitPow("自发光强度",range(1,10)) = 1
+        
     }
     SubShader 
     {
@@ -34,6 +46,28 @@ Shader "Unlit/OldSchoolPro"
             #include "Lighting.cginc" // 同上
             #pragma multi_compile_fwdbase_fullshadows
             #pragma target 3.0
+
+            //参数声明
+            //Texture
+            uniform sampler2D _MainTex;
+            uniform sampler2D _NormalMap;
+            uniform sampler2D _SpecTex;
+            uniform sampler2D _EmitTex;
+            uniform samplerCUBE _CubeMap;
+            //Diffuse
+            uniform float3 _BaseCol;
+            uniform float3 _EnvTopCol;
+            uniform float3 _EnvBottomCol;
+            uniform float3 _EnvSideCol;
+            uniform float _EnvDiffPow;
+            //Specular
+            uniform float _SpecularPow;
+            uniform float _EnvSpcPow;
+            uniform float _FresnelPow;
+            uniform float _CubeMapLOD;
+            //Emission
+            uniform float _EmitPow;
+
             // 输入结构
             struct VertexInput 
             {
@@ -54,84 +88,71 @@ Shader "Unlit/OldSchoolPro"
                 LIGHTING_COORDS(5,6)         // 投影用坐标信息 Unity已封装 不用管细节
             };
 
-            uniform sampler2D _MainTex;
-            uniform sampler2D _NormalMap;
-            uniform samplerCUBE _CubeMap;
-            uniform float _CubeMapLOD;
-            uniform float _FresnelPow;
-            uniform float3 _EnvUpCol;
-            uniform float3 _EnvSideCol;
-            uniform float3 _EnvDownCol;
-            uniform sampler2D _Occlusion;
-            uniform float _EnvLightPow;
-            uniform float _SpecularPow;
-
             // 输入结构>>>顶点Shader>>>输出结构
             VertexOutput vert (VertexInput v) 
             {
                 VertexOutput o = (VertexOutput)0; // 新建一个输出结构
+                o.uv = v.uv0;//获取UV信息
                 o.pos = UnityObjectToClipPos(v.vertex); // 变换顶点信息 OS->CS
                 o.posWS = mul(unity_ObjectToWorld,v.vertex);//变化顶点信息 OS->WS
-                o.nDirWS = UnityObjectToWorldNormal(v.normal);
+                o.nDirWS = UnityObjectToWorldNormal(v.normal);//变化顶点信息 ON-WN
                 o.tDirWS = normalize(mul(unity_ObjectToWorld,float4(v.tangent.xyz,0.0)).xyz);//获取世界空间的切线信息
-                o.bDirWS = normalize(cross(o.nDirWS,o.tDirWS) * v.tangent.w);//获取世界空间的副切线信息  
-                o.uv = v.uv0;
+                o.bDirWS = normalize(cross(o.nDirWS,o.tDirWS) * v.tangent.w);//获取世界空间的副切线信息                 
                 TRANSFER_VERTEX_TO_FRAGMENT(o) // Unity封装 不用管细节
                 return o; // 将输出结构 输出
             }
             // 输出结构>>>像素
             float4 frag(VertexOutput i) : COLOR 
             {
-                //计算添加法线贴图后的法线信息
-                float3 var_NormalMap = UnpackNormal(tex2D(_NormalMap,i.uv)).rgb;
+                // 准备向量
+                float3 nDirTS = UnpackNormal(tex2D(_NormalMap,i.uv)).rgb;
                 float3x3 TBN = float3x3(i.tDirWS,i.bDirWS,i.nDirWS);
-                float3 nDir = normalize(mul(var_NormalMap,TBN));
+                float3 nDirWS = normalize(mul(nDirTS,TBN));
+                float3 lDirWS = _WorldSpaceLightPos0.xyz;
+                float3 lrDirWS = reflect(-lDirWS,nDirWS);
+                float3 vDirWS = normalize(_WorldSpaceCameraPos.xyz - i.posWS.xyz);
+                float3 vrDirWS = reflect(-vDirWS,nDirWS);               
+                // 准备点积结果
+                float ndotl = dot(nDirWS,lDirWS);
+                float vdotr = dot(vDirWS,lrDirWS);
+                float vdotn = dot(vDirWS,nDirWS);
+                // 采样纹理
+                float4 var_MainTex = tex2D(_MainTex,i.uv);
+                float4 var_SpecTex = tex2D(_SpecTex,i.uv);
+                float3 var_EmitTex = tex2D(_EmitTex,i.uv).rgb;
+                float CubeMapMip = lerp(_CubeMapLOD,0.0,var_SpecTex.a);
+                float3 var_CubeMap = texCUBElod(_CubeMap,float4(vrDirWS,CubeMapMip)).rgb;
 
-                //计算CubeMap的贴图信息
-                float3 vDir = normalize(_WorldSpaceCameraPos.xyz - i.posWS.xyz);
-                float3 vrDir = reflect(-vDir,nDir);
-                float3 var_CubeMap = texCUBElod(_CubeMap,float4(vrDir,_CubeMapLOD));
-
-                //计算菲涅尔反射信息
-                float vdotn = dot(vDir,nDir);
-                float fresnel = pow(max(0.0,1.0 - vdotn),_FresnelPow);
-
-                //计算直接光照
-                //兰伯特光照
-                float3 lDir = normalize(_WorldSpaceLightPos0.xyz);
-                float3 ndotl = dot(nDir,lDir);              
-                float3 Lambert = max(0.0,ndotl);
-
-                //blinn-phong
-                float3 hDir = normalize(lDir + vDir);
-                float3 ndoth = dot(nDir,hDir);
-                float3 BlinnPhong = pow(max(0.0,ndoth),_SpecularPow);
-
-                //阴影
-                float Shadow = LIGHT_ATTENUATION(i); // 同样Unity封装好的函数 可取出投影
-
-                //直接光照最终颜色
-                float3 DirLightCol = (Lambert + BlinnPhong) * Shadow;
-
-                //计算环境光照               
-                float UpMask = max(0.0,i.nDirWS.g);
-                float SideMask = 1 - (max(0.0,i.nDirWS.g) + max(0.0,-i.nDirWS.g));
-                float DownMask = max(0.0,-i.nDirWS.g);
-                
-                float3 EnvCol = _EnvUpCol * UpMask + _EnvSideCol * SideMask + _EnvDownCol * DownMask;
-                float Occlusion = tex2D(_Occlusion,i.uv);  
-
-                //环境光照最终颜色
-                float3 EnvLightCol = EnvCol * Occlusion * fresnel * _EnvLightPow;
-                
-                //贴图颜色
-                float4 MainTex = tex2D(_MainTex,i.uv);
-                float3 MainTexCol = MainTex.rgb;
-                
-                //计算最终颜色
-                float3 finalRGB = var_CubeMap * MainTexCol * EnvLightCol * DirLightCol;
-                //返回结果                
-                return float4(finalRGB, 1.0);
+                // 光照模型(直接光照部分)
+                    //漫反射(兰伯特)
+                    float3 MainCol = var_MainTex.rgb * _BaseCol;
+                    float lambert = max(0.0,ndotl);
+                    //镜面反射(Phong)
+                    float specCol = var_SpecTex.rgb;
+                    float SpecPow = lerp(1,_SpecularPow,var_SpecTex.a);
+                    float Phong = pow(max(0.0,vdotr),SpecPow);
+                    //遮挡效果(shadow)
+                    float shadow = LIGHT_ATTENUATION(i);
+                    //直接光照混合
+                    float3 dirLighting = (MainCol * lambert + specCol * Phong) * _LightColor0 * shadow;
+                // 光照模型(环境光照部分)
+                    //漫反射(三色环境光)
+                    float EnvTopMask = max(0.0,nDirWS.g);
+                    float EnvBottomMask = max(0.0,-nDirWS.g);
+                    float EnvSideMask = 1 - EnvTopMask - EnvBottomMask;
+                    float3 EnvCol = _EnvTopCol * EnvTopMask + _EnvBottomCol * EnvBottomMask + _EnvSideCol * EnvSideMask;                
+                    //镜面反射(环境球贴图)
+                    float fresnel = pow(max(0.0,1.0 - vdotn),_FresnelPow);
+                    //遮挡效果(AO图)
+                    float occlusion = var_MainTex.a;
+                    //环境光照混合
+                    float3 envLighting = (MainCol * EnvCol * _EnvDiffPow + var_CubeMap * fresnel * _EnvSpcPow * var_SpecTex.a) * occlusion;
+                // 光照模型(自发光部分)
+                float emitpow = _EmitPow * (sin(frac(_Time.z)) * 0.5 + 0.5);
+                float3 emission = var_EmitTex * emitpow;
+                //返回结果
+                float3 finalRBG = dirLighting + envLighting + emission;
+                return float4(finalRBG, 1.0);
             }
         ENDCG
         }
